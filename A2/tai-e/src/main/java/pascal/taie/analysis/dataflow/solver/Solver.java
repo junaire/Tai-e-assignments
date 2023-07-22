@@ -23,8 +23,13 @@
 package pascal.taie.analysis.dataflow.solver;
 
 import pascal.taie.analysis.dataflow.analysis.DataflowAnalysis;
+import pascal.taie.analysis.dataflow.analysis.constprop.Value;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.cfg.CFG;
+import pascal.taie.ir.exp.LValue;
+import pascal.taie.ir.exp.Var;
+import pascal.taie.ir.stmt.DefinitionStmt;
+import pascal.taie.ir.stmt.Stmt;
 
 /**
  * Base class for data-flow analysis solver, which provides common
@@ -77,7 +82,13 @@ public abstract class Solver<Node, Fact> {
     }
 
     protected void initializeForward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        // TODO - finish me
+        result.setOutFact(cfg.getEntry(), analysis.newBoundaryFact(cfg));
+        for (Node node : cfg.getNodes()) {
+            if (cfg.isEntry(node)) {
+                continue;
+            }
+            result.setOutFact(node, analysis.newInitialFact(node));
+        }
     }
 
     protected void initializeBackward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {

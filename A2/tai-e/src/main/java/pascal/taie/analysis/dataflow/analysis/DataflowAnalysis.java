@@ -47,7 +47,7 @@ public interface DataflowAnalysis<Node, Fact> {
     /**
      * @return new initial fact for non-boundary nodes.
      */
-    Fact newInitialFact();
+    Fact newInitialFact(Node node);
 
     /**
      * Meets a fact into another (target) fact.
