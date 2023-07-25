@@ -50,7 +50,7 @@ public final class Tests {
     /**
      * Whether dump control-flow graphs or not.
      */
-    private static final boolean DUMP_CFG = false;
+    private static final boolean DUMP_CFG = true;
 
     /**
      * Starts an analysis for a specific test case.
