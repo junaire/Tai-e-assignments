@@ -85,7 +85,7 @@ public class ConstantPropagation extends
      * Meets two Values.
      */
     public Value meetValue(Value v1, Value v2) {
-        if (v1.isNAC() || v1.isNAC()) {
+        if (v1.isNAC() || v2.isNAC()) {
             return Value.getNAC();
         }
         if (v1.isUndef() && v2.isConstant()) {
