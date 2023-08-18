@@ -22,9 +22,12 @@
 
 package pascal.taie.analysis.dataflow.inter;
 
+import fj.P;
+import org.checkerframework.checker.units.qual.A;
 import pascal.taie.World;
 import pascal.taie.analysis.dataflow.analysis.constprop.CPFact;
 import pascal.taie.analysis.dataflow.analysis.constprop.ConstantPropagation;
+import pascal.taie.analysis.dataflow.analysis.constprop.Value;
 import pascal.taie.analysis.graph.cfg.CFG;
 import pascal.taie.analysis.graph.cfg.CFGBuilder;
 import pascal.taie.analysis.graph.icfg.CallEdge;
@@ -32,13 +35,21 @@ import pascal.taie.analysis.graph.icfg.CallToReturnEdge;
 import pascal.taie.analysis.graph.icfg.NormalEdge;
 import pascal.taie.analysis.graph.icfg.ReturnEdge;
 import pascal.taie.analysis.pta.PointerAnalysisResult;
+import pascal.taie.analysis.pta.core.cs.element.InstanceField;
+import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.config.AnalysisConfig;
 import pascal.taie.ir.IR;
+import pascal.taie.ir.exp.FieldAccess;
+import pascal.taie.ir.exp.InstanceFieldAccess;
 import pascal.taie.ir.exp.InvokeExp;
 import pascal.taie.ir.exp.Var;
-import pascal.taie.ir.stmt.Invoke;
-import pascal.taie.ir.stmt.Stmt;
+import pascal.taie.ir.stmt.*;
 import pascal.taie.language.classes.JMethod;
+import pascal.taie.util.collection.ArraySet;
+
+import java.awt.*;
+import java.util.*;
+import java.util.List;
 
 /**
  * Implementation of interprocedural constant propagation for int values.
@@ -50,6 +61,8 @@ public class InterConstantPropagation extends
 
     private final ConstantPropagation cp;
 
+    private PointerAnalysisResult pta;
+
     public InterConstantPropagation(AnalysisConfig config) {
         super(config);
         cp = new ConstantPropagation(new AnalysisConfig(ConstantPropagation.ID));
@@ -58,7 +71,7 @@ public class InterConstantPropagation extends
     @Override
     protected void initialize() {
         String ptaId = getOptions().getString("pta");
-        PointerAnalysisResult pta = World.get().getResult(ptaId);
+        pta = World.get().getResult(ptaId);
         // You can do initialization work here
     }
 
@@ -85,37 +98,125 @@ public class InterConstantPropagation extends
 
     @Override
     protected boolean transferCallNode(Stmt stmt, CPFact in, CPFact out) {
-        // TODO - finish me
+        return out.copyFrom(in);
+    }
+
+    private boolean transferInstanceLoad(LoadField loadField, InstanceFieldAccess instanceFieldAccess, CPFact in, CPFact out) {
+        Var lValue = loadField.getLValue();
+        CPFact inCopy = in.copy();
+        Set<Obj> objs = pta.getPointsToSet(instanceFieldAccess.getBase());
+
+        for (Var base : pta.getVars()) {
+            if (!Collections.disjoint(objs, pta.getPointsToSet(base))) {
+                Value result = inCopy.get(lValue);
+                for (StoreField storeField : base.getStoreFields()) {
+                    Var storeVar = storeField.getRValue();
+                    result = cp.meetValue(result, inCopy.get(storeVar));
+                }
+                inCopy.update(lValue, result);
+            }
+        }
+        return out.copyFrom(inCopy);
+    }
+
+    private boolean isArrayIndexAlias(Value index1, Value index2) {
+        if (index1.isUndef() || index2.isUndef()) return false;
+        if (index1.isNAC() || index2.isNAC()) return true;
+        if (index1.isConstant() && index2.isConstant()) {
+            return index1.getConstant() == index2.getConstant();
+        }
         return false;
+    }
+
+    private boolean transferArrayLoad(LoadArray loadArray, CPFact in, CPFact out) {
+        Var lValue = loadArray.getLValue();
+        CPFact inCopy = in.copy();
+        Set<Obj> objs = pta.getPointsToSet(loadArray.getArrayAccess().getBase());
+        Value index1 = inCopy.get(loadArray.getArrayAccess().getIndex());
+        for (Var base : pta.getVars()) {
+            if (!Collections.disjoint(objs, pta.getPointsToSet(base))) {
+                Value result = inCopy.get(lValue);
+                for (StoreArray storeArray : base.getStoreArrays()) {
+                    Value index2 = in.get(storeArray.getArrayAccess().getIndex());
+                    if (isArrayIndexAlias(index1, index2)) {
+                        Var storeVar = storeArray.getRValue();
+                        result = cp.meetValue(result, inCopy.get(storeVar));
+                    }
+                }
+                inCopy.update(lValue, result);
+            }
+        }
+        return out.copyFrom(inCopy);
     }
 
     @Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
-        // TODO - finish me
-        return false;
+        if (stmt instanceof LoadField loadField) {
+            if (loadField.getFieldAccess() instanceof InstanceFieldAccess instanceFieldAccess) {
+                return transferInstanceLoad(loadField, instanceFieldAccess, in, out);
+            }
+        }
+        if (stmt instanceof LoadArray loadArray) {
+            return transferArrayLoad(loadArray, in, out);
+        }
+
+        return cp.transferNode(stmt, in, out);
     }
 
     @Override
     protected CPFact transferNormalEdge(NormalEdge<Stmt> edge, CPFact out) {
-        // TODO - finish me
-        return null;
+        return out.copy();
     }
 
     @Override
     protected CPFact transferCallToReturnEdge(CallToReturnEdge<Stmt> edge, CPFact out) {
-        // TODO - finish me
-        return null;
+        CPFact fact = out.copy();
+        Stmt src = edge.getSource();
+        if (src instanceof Invoke invoke) {
+            Var var = invoke.getResult();
+            if (var != null) {
+                fact.remove(var);
+            }
+        }
+        return fact;
     }
 
     @Override
     protected CPFact transferCallEdge(CallEdge<Stmt> edge, CPFact callSiteOut) {
-        // TODO - finish me
-        return null;
+        CPFact fact = new CPFact();
+        Stmt src = edge.getSource();
+        Stmt dst = edge.getTarget();
+
+        List<Var> params = icfg.getContainingMethodOf(dst).getIR().getParams();
+        List<Var> args = ((Invoke) src).getInvokeExp().getArgs();
+
+        assert params.size() == args.size();
+
+        for (int i = 0; i < params.size(); ++i) {
+            fact.update(params.get(i), callSiteOut.get(args.get(i)));
+        }
+
+        return fact;
     }
 
     @Override
     protected CPFact transferReturnEdge(ReturnEdge<Stmt> edge, CPFact returnOut) {
-        // TODO - finish me
-        return null;
+        CPFact fact = new CPFact();
+
+        // Get all return values.
+        Value ret = Value.getUndef();
+        for (Var var : edge.getReturnVars()) {
+            ret = cp.meetValue(ret, returnOut.get(var));
+        }
+
+        Stmt caller = edge.getCallSite();
+        if (caller instanceof Invoke invoke) {
+            Var result = invoke.getResult();
+            if (result != null) {
+                fact.update(result, ret);
+            }
+        }
+        // Get all returned variables.
+        return fact;
     }
 }
